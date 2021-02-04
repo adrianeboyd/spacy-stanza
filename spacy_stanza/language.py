@@ -1,5 +1,5 @@
 # coding: utf8
-from spacy.symbols import POS, TAG, DEP, LEMMA, HEAD
+from spacy.symbols import POS, TAG, DEP, LEMMA, HEAD, SENT_START
 from spacy.language import Language
 from spacy.tokens import Doc, Span
 from spacy.util import get_lang_class
@@ -148,9 +148,11 @@ class Tokenizer(object):
         deps = []
         heads = []
         lemmas = []
+        sent_starts = []
         offset = 0
         token_texts = [t.text for t in snlp_tokens]
         is_aligned = True
+        is_parsed = False
         try:
             words, spaces = self.get_words_and_spaces(token_texts, text)
         except ValueError:
@@ -200,10 +202,18 @@ class Tokenizer(object):
                 deps.append(self.vocab.strings.add(token.deprel or ""))
                 heads.append(snlp_heads[i + offset])
                 lemmas.append(self.vocab.strings.add(token.lemma or ""))
+                if deps[-1] > 0 or heads[-1] != 0:
+                    is_parsed = True
+            sent_starts.append(snlp_tokens[i + offset].is_sent_start)
 
-        attrs = [POS, TAG, DEP, HEAD]
-        array = numpy.array(list(zip(pos, tags, deps, heads)), dtype="uint64")
+        if is_parsed:
+            attrs = [POS, TAG, DEP, HEAD]
+            array = numpy.array(list(zip(pos, tags, deps, heads)), dtype="uint64")
+        else:
+            attrs = [POS, TAG, SENT_START]
+            array = numpy.array(list(zip(pos, tags, sent_starts)), dtype="uint64")
         doc = Doc(self.vocab, words=words, spaces=spaces).from_array(attrs, array)
+
         ents = []
         for ent in snlp_doc.entities:
             ent_span = doc.char_span(ent.start_char, ent.end_char, ent.type)
@@ -224,7 +234,7 @@ class Tokenizer(object):
         doc.from_array([LEMMA], lemma_array)
         if any(pos) or any(tags):
             doc.is_tagged = True
-        if any(deps) or any(heads):
+        if is_parsed:
             doc.is_parsed = True
         return doc
 
@@ -248,8 +258,8 @@ class Tokenizer(object):
         heads = []
         offset = 0
         for sentence in snlp_doc.sentences:
-            for token in sentence.tokens:
-                for word in token.words:
+            for token_i, token in enumerate(sentence.tokens):
+                for word_i, word in enumerate(token.words):
                     # Here, we're calculating the absolute token index in the doc,
                     # then the *relative* index of the head, -1 for zero-indexed
                     # and if the governor is 0 (root), we leave it at 0
@@ -257,6 +267,10 @@ class Tokenizer(object):
                         head = word.head + offset - len(tokens) - 1
                     else:
                         head = 0
+                    if token_i == 0 and word_i == 0:
+                        word.is_sent_start = True
+                    else:
+                        word.is_sent_start = False
                     heads.append(head)
                     tokens.append(word)
             offset += sum(len(token.words) for token in sentence.tokens)
